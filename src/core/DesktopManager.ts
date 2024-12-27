@@ -23,7 +23,7 @@ import { GridSpec } from "../util/parser.js";
 import { UserPreferencesProvider } from "./UserPreferences.js";
 
 // splits computed gridspec cell areas in non-dynamic and dynamic cells
-type GridSpecAreas = [dedicated: Rectangle[], dynamic: Rectangle[]];
+type GridSpecAreas = [dedicated: Rectangle[], dynamic: Rectangle[], stackable: Rectangle[]];
 
 type FrameSize = { width: number; height: number };
 
@@ -359,7 +359,7 @@ export default class implements Publisher<DesktopEvent>, GarbageCollector {
    * @param monitorIdx The {@link Monitor.index} to apply the grid spec to.
    */
   autotile(spec: GridSpec, monitorIdx: number) {
-    const [dedicated, dynamic] = this.#gridSpecToAreas(spec);
+    const [dedicated, dynamic, stackable] = this.#gridSpecToAreas(spec);
     const workArea = this.#workArea(monitorIdx);
     const windows = this.#workspaceManager.get_active_workspace().list_windows()
 
@@ -396,18 +396,21 @@ export default class implements Publisher<DesktopEvent>, GarbageCollector {
     for (let i = 0; i < dedicated.length && i < windows.length; ++i) {
       this.#fit(windows[i], project(dedicated[i], workArea));
     }
-
-    // Fit remaining windows in dynamic cells
     windows.splice(0, dedicated.length);
-    for (let i = 0; i < dynamic.length; i++) {
-      const mustFitAtLeastN = Math.floor(windows.length / dynamic.length);
-      const mustTakeOverflowWindow = i < (windows.length % dynamic.length);
-      const n = mustFitAtLeastN + (mustTakeOverflowWindow ? 1 : 0);
 
-      let j = i;
-      for (const area of this.#splitN(dynamic[i], n)) {
-        this.#fit(windows[j], project(area, workArea));
-        j += dynamic.length;
+    // Fit remaining windows in dynamic cells if any, otherwise fit them in
+    // stackable cells
+    const cells = dynamic.length == 0 ? stackable : dynamic;
+    for (let i = 0; i < cells.length; i++) {
+      const mustFitAtLeastN = Math.floor(windows.length / cells.length);
+      const mustTakeOverflowWindow = i < (windows.length % cells.length);
+      const n = mustFitAtLeastN + (mustTakeOverflowWindow ? 1 : 0);
+      const split = Math.min(n, dynamic.length == 0 ? 1 : n)
+      const areas = this.#splitN(cells[i], split);
+      for (let j = 0; j < n; j++) {
+        const window = i+(j*cells.length)
+        const area = j % areas.length
+        this.#fit(windows[window], project(areas[area], workArea));
       }
     }
   }
@@ -622,6 +625,7 @@ export default class implements Publisher<DesktopEvent>, GarbageCollector {
   #gridSpecToAreas(spec: GridSpec, x = 0, y = 0, w = 1, h = 1): GridSpecAreas {
     const regularCells: Rectangle[] = [];
     const dynamicCells: Rectangle[] = [];
+    const stackableCells: Rectangle[] = [];
     const totalWeight = spec.cells.reduce((sum, c) => sum + c.weight, 0);
 
     for (const cell of spec.cells) {
@@ -630,14 +634,17 @@ export default class implements Publisher<DesktopEvent>, GarbageCollector {
       const height = spec.mode === "rows" ? h * ratio : h;
 
       if (cell.child) {
-        const [dedicated, dynamic] =
+        const [dedicated, dynamic, stackable] =
           this.#gridSpecToAreas(cell.child, x, y, width, height);
 
         regularCells.push(...dedicated);
         dynamicCells.push(...dynamic);
+        stackableCells.push(...stackable);
       } else if (cell.dynamic) {
         dynamicCells.push({ x, y, width, height });
-      } else {
+      } else if (cell.stack) {
+        stackableCells.push({ x, y, width, height });
+      } else if (!cell.mask) {
         regularCells.push({ x, y, width, height });
       }
 
@@ -645,7 +652,7 @@ export default class implements Publisher<DesktopEvent>, GarbageCollector {
       if (spec.mode === "rows") y += height;
     }
 
-    return [regularCells, dynamicCells];
+    return [regularCells, dynamicCells, stackableCells];
   }
 
   #splitN(rect: Rectangle, n: number, axis?: "x" | "y"): Rectangle[] {

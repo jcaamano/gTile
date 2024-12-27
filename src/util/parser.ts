@@ -32,6 +32,8 @@ export interface GridSpec {
 export interface GridCellSpec {
   weight: number;
   dynamic: boolean;
+  mask: boolean;
+  stack: boolean;
   child?: GridSpec;
 }
 
@@ -407,16 +409,24 @@ export class GridSpecParser extends Parser {
   #parseCellSpec(): GridCellSpec {
     const weight = this.#parseNumber();
     let dynamic = false;
+    let mask = false;
+    let stack = false;
     let child: GridSpec | undefined;
 
     if (this.token.kind === Literal.Keyword && this.token.raw === "d") {
       this.accept();
       dynamic = true;
+    } else if (this.token.kind === Literal.Keyword && this.token.raw === "m") {
+      this.accept();
+      mask = true;
+    } else if (this.token.kind === Literal.Keyword && this.token.raw === "s") {
+      this.accept();
+      stack = true;
     } else if (this.acceptIf(Literal.Colon)) {
       child = this.#parseColRowSpec();
     }
 
-    return { weight, dynamic, child };
+    return { weight, dynamic, mask, stack, child };
   }
 
   #parseNumber(): number {
